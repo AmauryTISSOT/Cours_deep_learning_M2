@@ -38,6 +38,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Crash dumps (Git Bash / Cygwin)
+*.stackdump
+
 # Deep learning artifacts
 *.ckpt
 *.pt

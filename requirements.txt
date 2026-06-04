@@ -7,3 +7,10 @@ matplotlib
 seaborn
 scikit-learn
 tensorflow
+
+# Section Transfer Learning (Transformer). Pour le support GPU (NVIDIA),
+# installer torch via l'index CUDA, p. ex. CUDA 12.4 :
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+torch
+transformers<5
+sentencepiece

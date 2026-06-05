@@ -1,6 +1,6 @@
 # Cours Deep Learning M2 — Détecteur de SMS spam / scam
 
-Etudiant : Amaury TISSOT
+Etudiant : Amaury TISSOT  
 Classe : DIS MIA 26.2
 
 Projet de classification de SMS spam / scam comparant trois approches — machine

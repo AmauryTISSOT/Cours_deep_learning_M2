@@ -58,6 +58,7 @@ wandb/
 mlruns/
 lightning_logs/
 outputs/
+artifacts/
 
 # Data
 data/

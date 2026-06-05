@@ -13,3 +13,7 @@ scikit-learn
 torch
 transformers<5
 sentencepiece
+
+# Dashboard de démonstration
+streamlit
+plotly

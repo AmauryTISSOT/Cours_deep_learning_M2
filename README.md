@@ -103,7 +103,14 @@ Le notebook se trouve dans `notebooks/01-at-sms-spam.ipynb`.
 ## Lancer le dashboard
 
 ```powershell
+# PowerShell
 .venv\Scripts\Activate.ps1
+streamlit run app/streamlit_app.py
+```
+
+```bash
+# Bash (Git Bash / Linux / macOS)
+source .venv/Scripts/activate   # Linux/macOS : source .venv/bin/activate
 streamlit run app/streamlit_app.py
 ```
 

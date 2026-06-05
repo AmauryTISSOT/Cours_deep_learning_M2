@@ -117,3 +117,9 @@ streamlit run app/streamlit_app.py
 Le dashboard charge les modèles exportés depuis `artifacts/`. Exécuter au préalable les
 dernières cellules du notebook pour générer ces artefacts (et `artifacts/metrics.json`
 pour l'onglet Métriques).
+
+## Outils
+
+Ce projet a été développé avec l'assistance de **Claude Code** (Anthropic) comme outil
+de pair-programming : aide à la structuration du code, au dashboard Streamlit et à la
+rédaction de la documentation.

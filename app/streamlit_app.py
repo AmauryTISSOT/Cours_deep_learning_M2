@@ -8,10 +8,14 @@ en direct : verdict + probabilité + jauge, choix du modèle, seuil ajustable,
 exemples cliquables et comparaison des trois modèles.
 """
 
+import json
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from sklearn.metrics import auc, roc_auc_score, roc_curve
 
 from inference import MODEL_LABELS, SpamModels
 
@@ -103,6 +107,131 @@ def barres_explicabilite(contribs: list) -> go.Figure:
     return fig
 
 
+# --- Onglet Métriques : tout est recalculé depuis les probabilités pré-exportées ---
+@st.cache_data(show_spinner=False)
+def charger_metriques() -> dict | None:
+    """Lit artifacts/metrics.json (probabilités de spam des 3 modèles + vérité terrain)."""
+    chemin = ARTIFACTS_DIR / "metrics.json"
+    if not chemin.exists():
+        return None
+    return json.loads(chemin.read_text(encoding="utf-8"))
+
+
+def _scores_au_seuil(y_true, proba, seuil: float) -> dict:
+    """Métriques (classe positive = spam) au seuil donné + matrice de confusion."""
+    y_true = np.asarray(y_true)
+    pred = (np.asarray(proba) >= seuil).astype(int)
+    tp = int(((pred == 1) & (y_true == 1)).sum())
+    fp = int(((pred == 1) & (y_true == 0)).sum())
+    tn = int(((pred == 0) & (y_true == 0)).sum())
+    fn = int(((pred == 0) & (y_true == 1)).sum())
+    prec = tp / (tp + fp) if (tp + fp) else 0.0
+    rec = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+    return {
+        "Accuracy": (tp + tn) / len(y_true),
+        "Précision (spam)": prec,
+        "Rappel (spam)": rec,
+        "F1 (spam)": f1,
+        "cm": (tn, fp, fn, tp),
+    }
+
+
+def tableau_scores(metrics: dict, seuil: float) -> pd.DataFrame:
+    """Tableau Accuracy / Précision / Rappel / F1 / AUC des trois modèles."""
+    y = metrics["y_true"]
+    lignes = []
+    for k in ("ml", "rnn", "transformer"):
+        proba = metrics["models"][k]["proba"]
+        s = _scores_au_seuil(y, proba, seuil)
+        lignes.append({
+            "Modèle": MODEL_LABELS[k],
+            "Accuracy": s["Accuracy"],
+            "Précision (spam)": s["Précision (spam)"],
+            "Rappel (spam)": s["Rappel (spam)"],
+            "F1 (spam)": s["F1 (spam)"],
+            "AUC": roc_auc_score(y, proba),   # indépendante du seuil
+        })
+    return pd.DataFrame(lignes).set_index("Modèle")
+
+
+def fig_confusion(cm: tuple, titre: str) -> go.Figure:
+    """Heatmap 2×2 (réel × prédit) à partir de (tn, fp, fn, tp)."""
+    tn, fp, fn, tp = cm
+    z = [[tn, fp], [fn, tp]]   # ligne = réel (ham, spam) ; colonne = prédit (ham, spam)
+    fig = go.Figure(go.Heatmap(
+        z=z, x=["ham", "spam"], y=["ham", "spam"], colorscale="Blues", showscale=False,
+        text=[[f"{v:,}" for v in row] for row in z], texttemplate="%{text}",
+        textfont={"size": 18},
+    ))
+    fig.update_layout(
+        title=dict(text=titre, font=dict(size=14)),
+        xaxis_title="Prédit", yaxis_title="Réel",
+        yaxis=dict(autorange="reversed"),   # ham en haut
+        height=300, margin=dict(t=50, b=40, l=40, r=10),
+    )
+    return fig
+
+
+def fig_roc(metrics: dict) -> go.Figure:
+    """Courbes ROC superposées des trois modèles (+ diagonale du hasard)."""
+    couleurs = {"ml": "#1f77b4", "rnn": "#ff7f0e", "transformer": "#2ca02c"}
+    y = metrics["y_true"]
+    fig = go.Figure()
+    for k in ("ml", "rnn", "transformer"):
+        fpr, tpr, _ = roc_curve(y, metrics["models"][k]["proba"])
+        fig.add_trace(go.Scatter(
+            x=fpr, y=tpr, mode="lines", line=dict(color=couleurs[k], width=2),
+            name=f"{MODEL_LABELS[k]} — AUC {auc(fpr, tpr):.3f}",
+        ))
+    fig.add_trace(go.Scatter(
+        x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash", color="grey"),
+        name="Hasard", showlegend=False,
+    ))
+    fig.update_layout(
+        xaxis_title="Taux de faux positifs", yaxis_title="Taux de vrais positifs (rappel)",
+        xaxis_range=[0, 1], yaxis_range=[0, 1.02], height=460,
+        legend=dict(x=0.98, y=0.05, xanchor="right", yanchor="bottom",
+                    bgcolor="rgba(255,255,255,0.6)"),
+        margin=dict(t=20, b=40, l=10, r=10),
+    )
+    return fig
+
+
+def afficher_metriques(seuil: float) -> None:
+    """Onglet Métriques : tableau des scores + matrices de confusion + courbes ROC."""
+    metrics = charger_metriques()
+    if metrics is None:
+        st.info(
+            "Métriques indisponibles. Exécute la dernière cellule du notebook "
+            "(export des métriques) pour générer `artifacts/metrics.json`."
+        )
+        return
+
+    st.caption(
+        f"Évalué sur **{metrics['n_test']:,} messages** de test "
+        f"({metrics['positive_rate']:.1%} de spam). "
+        f"Tableau et matrices calculés au seuil **{seuil:.0%}** (réglable dans la barre latérale) ; "
+        "l'AUC en est indépendante."
+    )
+
+    st.markdown("##### Scores comparés")
+    df = tableau_scores(metrics, seuil)
+    st.dataframe(
+        df.style.format("{:.3f}").highlight_max(axis=0, color="#d4edda"),
+        use_container_width=True,
+    )
+
+    st.markdown("##### Matrices de confusion")
+    cols = st.columns(3)
+    for col, k in zip(cols, ("ml", "rnn", "transformer")):
+        s = _scores_au_seuil(metrics["y_true"], metrics["models"][k]["proba"], seuil)
+        col.plotly_chart(fig_confusion(s["cm"], MODEL_LABELS[k]), use_container_width=True)
+
+    st.markdown("##### Courbes ROC")
+    st.plotly_chart(fig_roc(metrics), use_container_width=True)
+
+
 # --- Configuration de la page ---
 st.set_page_config(page_title="Détecteur de SMS spam", page_icon="📨", layout="centered")
 st.title("📨 Détecteur de SMS spam / scam")
@@ -134,40 +263,46 @@ with st.sidebar:
     st.divider()
     st.caption(f"Calcul sur : **{str(models.device).upper()}**")
 
-# --- Zone de saisie ---
-st.session_state.setdefault("sms_text", EXEMPLES[0][1])
+onglet_demo, onglet_metriques = st.tabs(["🔎 Démo d'inférence", "📊 Métriques"])
 
-st.subheader("Message à analyser")
-st.write("Essaie un exemple :")
-cols = st.columns(3)
-for i, (libelle, texte, _) in enumerate(EXEMPLES):
-    cols[i % 3].button(libelle, use_container_width=True, on_click=set_exemple, args=(texte,))
+# --- Onglet 1 : démo d'inférence ---
+with onglet_demo:
+    st.session_state.setdefault("sms_text", EXEMPLES[0][1])
 
-sms = st.text_area("SMS", key="sms_text", height=120, label_visibility="collapsed")
-analyser = st.button("🔍 Analyser", type="primary", use_container_width=True)
+    st.subheader("Message à analyser")
+    st.write("Essaie un exemple :")
+    cols = st.columns(3)
+    for i, (libelle, texte, _) in enumerate(EXEMPLES):
+        cols[i % 3].button(libelle, use_container_width=True, on_click=set_exemple, args=(texte,))
 
-# --- Résultats ---
-if analyser:
-    if not sms.strip():
-        st.warning("Saisis un message (ou choisis un exemple) avant d'analyser.")
-    elif comparer:
-        st.subheader("Comparaison des trois modèles")
-        probas = models.predict_all(sms)
-        st.plotly_chart(barres_comparaison(probas, seuil), use_container_width=True)
-    else:
-        st.subheader(f"Résultat — {MODEL_LABELS[model_key]}")
-        proba = models.predict(model_key, sms)
-        afficher_verdict(proba, seuil)
+    sms = st.text_area("SMS", key="sms_text", height=120, label_visibility="collapsed")
+    analyser = st.button("🔍 Analyser", type="primary", use_container_width=True)
 
-        st.markdown("##### Pourquoi ce verdict ?")
-        if model_key == "ml":
-            contribs = models.explain_ml(sms, top_k=10)
-            if contribs:
-                st.plotly_chart(barres_explicabilite(contribs), use_container_width=True)
-                st.caption("Rouge = pousse vers *spam*, vert = vers *ham*. "
-                           "Calculé à partir des coefficients de la régression logistique.")
-            else:
-                st.info("Aucun terme connu du modèle dans ce message (que des mots hors vocabulaire).")
+    if analyser:
+        if not sms.strip():
+            st.warning("Saisis un message (ou choisis un exemple) avant d'analyser.")
+        elif comparer:
+            st.subheader("Comparaison des trois modèles")
+            probas = models.predict_all(sms)
+            st.plotly_chart(barres_comparaison(probas, seuil), use_container_width=True)
         else:
-            st.info("Explicabilité par mot disponible uniquement pour le modèle ML "
-                    "(le RNN et le Transformer ne sont pas linéaires).")
+            st.subheader(f"Résultat — {MODEL_LABELS[model_key]}")
+            proba = models.predict(model_key, sms)
+            afficher_verdict(proba, seuil)
+
+            st.markdown("##### Pourquoi ce verdict ?")
+            if model_key == "ml":
+                contribs = models.explain_ml(sms, top_k=10)
+                if contribs:
+                    st.plotly_chart(barres_explicabilite(contribs), use_container_width=True)
+                    st.caption("Rouge = pousse vers *spam*, vert = vers *ham*. "
+                               "Calculé à partir des coefficients de la régression logistique.")
+                else:
+                    st.info("Aucun terme connu du modèle dans ce message (que des mots hors vocabulaire).")
+            else:
+                st.info("Explicabilité par mot disponible uniquement pour le modèle ML "
+                        "(le RNN et le Transformer ne sont pas linéaires).")
+
+# --- Onglet 2 : métriques de test (pré-calculées) ---
+with onglet_metriques:
+    afficher_metriques(seuil)
